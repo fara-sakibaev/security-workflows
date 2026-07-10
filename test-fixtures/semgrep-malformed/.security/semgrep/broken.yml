@@ -1,0 +1,4 @@
+rules:
+  - id: malformed-rule
+    languages: [python
+    pattern: print(...)

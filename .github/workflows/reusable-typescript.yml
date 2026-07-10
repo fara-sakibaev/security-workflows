@@ -1,0 +1,33 @@
+name: reusable-security-typescript
+
+on:
+  workflow_call:
+    inputs:
+      profile: {required: true, type: string}
+      fail_on_severity: {required: true, type: string}
+      upload_sarif: {required: true, type: boolean}
+      scan_container: {required: true, type: boolean}
+      container_image: {required: false, default: "", type: string}
+      run_semgrep: {required: true, type: boolean}
+      run_language_analysis: {required: true, type: boolean}
+      working_directory: {required: true, type: string}
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: TypeScript baseline
+    uses: ./.github/workflows/reusable-generic.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: typescript
+      fail_on_severity: ${{ inputs.fail_on_severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ inputs.container_image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ inputs.working_directory }}

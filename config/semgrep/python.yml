@@ -1,0 +1,21 @@
+rules:
+  - id: python-unsafe-yaml-load
+    message: Use yaml.safe_load() for untrusted YAML.
+    languages: [python]
+    severity: ERROR
+    pattern: yaml.load($INPUT)
+
+  - id: python-eval-dynamic
+    message: Dynamic evaluation introduces execution risk.
+    languages: [python]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+
+  - id: python-os-system
+    message: Avoid shell execution helpers with unvalidated input.
+    languages: [python]
+    severity: ERROR
+    pattern: os.system($CMD)

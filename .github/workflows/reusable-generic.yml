@@ -1,0 +1,363 @@
+name: reusable-security-generic
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        required: true
+        type: string
+      fail_on_severity:
+        required: true
+        type: string
+      upload_sarif:
+        required: true
+        type: boolean
+      scan_container:
+        required: true
+        type: boolean
+      container_image:
+        required: false
+        default: ""
+        type: string
+      run_semgrep:
+        required: true
+        type: boolean
+      run_language_analysis:
+        required: true
+        type: boolean
+      working_directory:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Read-only baseline scanners
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      gitleaks-status: ${{ steps.gitleaks.outputs.status }}
+      gitleaks-findings: ${{ steps.gitleaks.outputs.findings }}
+      osv-status: ${{ steps.osv.outputs.status }}
+      osv-findings: ${{ steps.osv.outputs.findings }}
+      osv-blocking: ${{ steps.osv.outputs.blocking-findings }}
+      trivy-status: ${{ steps.trivy.outputs.status }}
+      trivy-vulnerabilities: ${{ steps.trivy.outputs.vuln-findings }}
+      trivy-misconfigurations: ${{ steps.trivy.outputs.misconfig-findings }}
+      trivy-image: ${{ steps.trivy.outputs.image-findings }}
+      semgrep-status: ${{ steps.semgrep.outputs.status }}
+      semgrep-findings: ${{ steps.semgrep.outputs.findings }}
+    steps:
+      - id: workflow-identity
+        name: Resolve reusable workflow identity
+        shell: bash
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          job = json.loads(os.environ['JOB_CONTEXT'])
+          repository = job.get('workflow_repository', '')
+          sha = job.get('workflow_sha', '')
+          if not re.fullmatch(r'[^/\s]+/[^/\s]+', repository):
+              raise SystemExit('job.workflow_repository is unavailable or invalid')
+          if not re.fullmatch(r'[0-9a-f]{40}', sha):
+              raise SystemExit('job.workflow_sha is unavailable or is not an immutable SHA')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'repository={repository}\nsha={sha}\n')
+          PY
+
+      - name: Checkout caller repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout security workflow source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ steps.workflow-identity.outputs.repository }}
+          ref: ${{ steps.workflow-identity.outputs.sha }}
+          path: security-platform
+          persist-credentials: false
+
+      - id: workspace
+        name: Assert checkout identities and resolve working directory
+        shell: bash
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ steps.workflow-identity.outputs.sha }}
+          REQUESTED_WORKDIR: ${{ inputs.working_directory }}
+          EXPECTED_CALLER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual_workflow_sha="$(git -C security-platform rev-parse HEAD)"
+          actual_caller_sha="$(git -C workspace rev-parse HEAD)"
+          [ "$actual_workflow_sha" = "$EXPECTED_WORKFLOW_SHA" ] || {
+            printf 'Central checkout mismatch: expected %s, found %s\n' "$EXPECTED_WORKFLOW_SHA" "$actual_workflow_sha" >&2
+            exit 1
+          }
+          [ "$actual_caller_sha" = "$EXPECTED_CALLER_SHA" ] || {
+            printf 'Caller checkout mismatch: expected %s, found %s\n' "$EXPECTED_CALLER_SHA" "$actual_caller_sha" >&2
+            exit 1
+          }
+          workdir="$(bash security-platform/scripts/resolve-workdir.sh "$GITHUB_WORKSPACE/workspace" "$REQUESTED_WORKDIR")"
+          printf 'path=%s\n' "$workdir" >> "$GITHUB_OUTPUT"
+          printf 'Central security configuration verified at %s.\n' "$actual_workflow_sha" >> "$GITHUB_STEP_SUMMARY"
+
+      - id: gitleaks
+        name: Gitleaks
+        uses: ./security-platform/actions/run-gitleaks
+        with:
+          working-directory: ${{ steps.workspace.outputs.path }}
+          report-dir: ${{ github.workspace }}/reports/gitleaks
+          include-history: "true"
+
+      - id: osv
+        name: OSV-Scanner
+        uses: ./security-platform/actions/run-osv-scanner
+        with:
+          working-directory: ${{ steps.workspace.outputs.path }}
+          report-dir: ${{ github.workspace }}/reports/osv
+          profile: ${{ inputs.profile }}
+          fail-on-severity: ${{ inputs.fail_on_severity }}
+
+      - id: trivy
+        name: Trivy
+        uses: ./security-platform/actions/run-trivy
+        with:
+          working-directory: ${{ steps.workspace.outputs.path }}
+          report-dir: ${{ github.workspace }}/reports/trivy
+          fail-on-severity: ${{ inputs.fail_on_severity }}
+          scan-container: ${{ inputs.scan_container }}
+          container-image: ${{ inputs.container_image }}
+
+      - id: semgrep
+        name: Semgrep Community Edition
+        if: inputs.run_semgrep
+        uses: ./security-platform/actions/run-semgrep
+        with:
+          working-directory: ${{ steps.workspace.outputs.path }}
+          report-dir: ${{ github.workspace }}/reports/semgrep
+          profile: ${{ inputs.profile }}
+          local-rules: .security/semgrep
+
+      - name: Retain machine-readable reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-reports-${{ inputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports
+          if-no-files-found: warn
+          retention-days: 5
+
+  upload-sarif:
+    name: Upload validated SARIF
+    needs: scan
+    if: >-
+      inputs.upload_sarif &&
+      needs.scan.result == 'success' &&
+      !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - id: workflow-identity
+        shell: bash
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          job = json.loads(os.environ['JOB_CONTEXT'])
+          repository = job.get('workflow_repository', '')
+          sha = job.get('workflow_sha', '')
+          if not repository or not re.fullmatch(r'[0-9a-f]{40}', sha):
+              raise SystemExit('reusable workflow identity is unavailable')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'repository={repository}\nsha={sha}\n')
+          PY
+
+      - name: Checkout caller repository for SARIF fingerprints
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: workspace
+          persist-credentials: false
+
+      - name: Checkout exact security workflow source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ steps.workflow-identity.outputs.repository }}
+          ref: ${{ steps.workflow-identity.outputs.sha }}
+          path: security-platform
+          persist-credentials: false
+
+      - name: Download scanner reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: security-reports-${{ inputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports
+
+      - name: Validate expected SARIF files
+        shell: bash
+        env:
+          GITLEAKS_STATUS: ${{ needs.scan.outputs.gitleaks-status }}
+          OSV_STATUS: ${{ needs.scan.outputs.osv-status }}
+          TRIVY_STATUS: ${{ needs.scan.outputs.trivy-status }}
+          SEMGREP_STATUS: ${{ needs.scan.outputs.semgrep-status }}
+          RUN_SEMGREP: ${{ inputs.run_semgrep }}
+          SCAN_CONTAINER: ${{ inputs.scan_container }}
+        run: |
+          set -euo pipefail
+          files=()
+          if [ "$GITLEAKS_STATUS" != scanner-execution-failure ]; then
+            files+=(reports/gitleaks/gitleaks-content.sarif reports/gitleaks/gitleaks-history.sarif)
+          fi
+          if [ "$OSV_STATUS" = passed ] || [ "$OSV_STATUS" = findings-detected ]; then
+            files+=(reports/osv/osv-results.sarif)
+          fi
+          if [ "$TRIVY_STATUS" != scanner-execution-failure ]; then
+            files+=(reports/trivy/trivy-vulnerabilities.sarif reports/trivy/trivy-misconfiguration.sarif)
+            if [ "$SCAN_CONTAINER" = true ]; then
+              files+=(reports/trivy/trivy-image.sarif)
+            fi
+          fi
+          if [ "$RUN_SEMGREP" = true ] && [ "$SEMGREP_STATUS" != scanner-execution-failure ]; then
+            files+=(reports/semgrep/semgrep.sarif)
+          fi
+          python3 security-platform/scripts/validate-sarif.py "${files[@]}"
+
+      - name: Upload Gitleaks content SARIF
+        if: needs.scan.outputs.gitleaks-status != 'scanner-execution-failure'
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: reports/gitleaks/gitleaks-content.sarif
+          category: gitleaks-content
+          checkout_path: workspace
+
+      - name: Upload Gitleaks history SARIF
+        if: needs.scan.outputs.gitleaks-status != 'scanner-execution-failure'
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: reports/gitleaks/gitleaks-history.sarif
+          category: gitleaks-history
+          checkout_path: workspace
+
+      - name: Upload OSV SARIF
+        if: needs.scan.outputs.osv-status == 'passed' || needs.scan.outputs.osv-status == 'findings-detected'
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: reports/osv/osv-results.sarif
+          category: osv
+          checkout_path: workspace
+
+      - name: Upload Trivy vulnerability SARIF
+        if: needs.scan.outputs.trivy-status != 'scanner-execution-failure'
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: reports/trivy/trivy-vulnerabilities.sarif
+          category: trivy-vulnerabilities
+          checkout_path: workspace
+
+      - name: Upload Trivy misconfiguration SARIF
+        if: needs.scan.outputs.trivy-status != 'scanner-execution-failure'
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: reports/trivy/trivy-misconfiguration.sarif
+          category: trivy-misconfiguration
+          checkout_path: workspace
+
+      - name: Upload Trivy image SARIF
+        if: inputs.scan_container && needs.scan.outputs.trivy-status != 'scanner-execution-failure'
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: reports/trivy/trivy-image.sarif
+          category: trivy-image
+          checkout_path: workspace
+
+      - name: Upload Semgrep SARIF
+        if: inputs.run_semgrep && needs.scan.outputs.semgrep-status != 'scanner-execution-failure'
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: reports/semgrep/semgrep.sarif
+          category: semgrep
+          checkout_path: workspace
+
+  gate:
+    name: Enforce baseline policy
+    needs: scan
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Evaluate normalized statuses
+        shell: bash
+        env:
+          SCAN_RESULT: ${{ needs.scan.result }}
+          GITLEAKS_STATUS: ${{ needs.scan.outputs.gitleaks-status }}
+          GITLEAKS_FINDINGS: ${{ needs.scan.outputs.gitleaks-findings }}
+          OSV_STATUS: ${{ needs.scan.outputs.osv-status }}
+          OSV_FINDINGS: ${{ needs.scan.outputs.osv-findings }}
+          OSV_BLOCKING: ${{ needs.scan.outputs.osv-blocking }}
+          TRIVY_STATUS: ${{ needs.scan.outputs.trivy-status }}
+          TRIVY_VULNS: ${{ needs.scan.outputs.trivy-vulnerabilities }}
+          TRIVY_MISCONFIGS: ${{ needs.scan.outputs.trivy-misconfigurations }}
+          TRIVY_IMAGE: ${{ needs.scan.outputs.trivy-image }}
+          SEMGREP_STATUS: ${{ needs.scan.outputs.semgrep-status }}
+          SEMGREP_FINDINGS: ${{ needs.scan.outputs.semgrep-findings }}
+          RUN_SEMGREP: ${{ inputs.run_semgrep }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            printf '## %s security baseline\n\n' '${{ inputs.profile }}'
+            printf '| Scanner | Status | Findings |\n|---|---|---:|\n'
+            printf '| Gitleaks | %s | %s |\n' "$GITLEAKS_STATUS" "$GITLEAKS_FINDINGS"
+            printf '| OSV-Scanner | %s | %s |\n' "$OSV_STATUS" "$OSV_FINDINGS"
+            printf '| Trivy vulnerabilities | %s | %s |\n' "$TRIVY_STATUS" "$TRIVY_VULNS"
+            printf '| Trivy misconfiguration | %s | %s |\n' "$TRIVY_STATUS" "$TRIVY_MISCONFIGS"
+            printf '| Trivy image | %s | %s |\n' "$TRIVY_STATUS" "$TRIVY_IMAGE"
+            if [ "$RUN_SEMGREP" = true ]; then
+              printf '| Semgrep | %s | %s |\n' "$SEMGREP_STATUS" "$SEMGREP_FINDINGS"
+            else
+              printf '| Semgrep | not-configured | 0 |\n'
+            fi
+            if [ "$IS_FORK_PR" = true ]; then
+              printf '\nSARIF upload was skipped because this is a fork pull request; read-only scanners still ran.\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$SCAN_RESULT" = success ] || { printf 'Scanner job infrastructure failed.\n' >&2; exit 1; }
+          for status in "$GITLEAKS_STATUS" "$OSV_STATUS" "$TRIVY_STATUS"; do
+            [ "$status" != scanner-execution-failure ] || { printf 'A mandatory scanner failed to execute.\n' >&2; exit 1; }
+          done
+          if [ "$RUN_SEMGREP" = true ] && [ "$SEMGREP_STATUS" = scanner-execution-failure ]; then
+            printf 'Semgrep failed to execute.\n' >&2
+            exit 1
+          fi
+          [ "$GITLEAKS_STATUS" != findings-detected ] || { printf 'Gitleaks findings block the workflow.\n' >&2; exit 1; }
+          [ "${OSV_BLOCKING:-0}" -eq 0 ] || { printf 'OSV dependency findings block the workflow.\n' >&2; exit 1; }
+          [ "$TRIVY_STATUS" != findings-detected ] || { printf 'Trivy findings at the configured threshold block the workflow.\n' >&2; exit 1; }
+          if [ "$RUN_SEMGREP" = true ] && [ "$SEMGREP_STATUS" = findings-detected ]; then
+            printf 'Semgrep high-confidence findings block the workflow.\n' >&2
+            exit 1
+          fi

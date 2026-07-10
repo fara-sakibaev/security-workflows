@@ -1,0 +1,30 @@
+# Local scans and generated artifacts
+**/.security/reports/
+!**/.security/reports/.keep
+.tools/
+.test-output/
+.trivycache/
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+.yarn/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Cargo
+/target/
+Cargo.lock.tmp
+
+# Composer
+vendor/
+
+# Temp files
+**/.mypy_cache/
+**/.pytest_cache/

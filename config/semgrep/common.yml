@@ -1,0 +1,32 @@
+rules:
+  - id: no-shell-command-with-shell-true
+    message: Avoid executing a shell with attacker-influenced command text.
+    languages: [python]
+    severity: ERROR
+    pattern-either:
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+
+  - id: unsafe-python-deserialization
+    message: pickle.loads can execute attacker-controlled object construction.
+    languages: [python]
+    severity: ERROR
+    pattern: pickle.loads(...)
+
+  - id: unsafe-temporary-file-name
+    message: tempfile.mktemp is race-prone; create the temporary file atomically.
+    languages: [python]
+    severity: ERROR
+    pattern: tempfile.mktemp(...)
+
+  - id: obvious-hardcoded-credential
+    message: A credential-like assignment contains a long literal value.
+    languages: [generic]
+    severity: ERROR
+    pattern-regex: '(?i)(password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*["''][A-Za-z0-9_./+\-=]{24,}["'']'
+
+  - id: disabled-tls-verification
+    message: TLS certificate verification is explicitly disabled.
+    languages: [generic]
+    severity: ERROR
+    pattern-regex: '(?i)(verify\s*=\s*false|rejectUnauthorized\s*:\s*false|CURLOPT_SSL_VERIFYPEER\s*,\s*false)'

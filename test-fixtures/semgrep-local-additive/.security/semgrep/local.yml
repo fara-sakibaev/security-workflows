@@ -1,0 +1,6 @@
+rules:
+  - id: fixture-local-rule
+    message: Synthetic project-local additive rule.
+    languages: [python]
+    severity: ERROR
+    pattern: subprocess.run(...)

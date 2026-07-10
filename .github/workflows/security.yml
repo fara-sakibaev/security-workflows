@@ -1,0 +1,34 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: dogfood-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    name: Public reusable workflow dogfood
+    uses: ./.github/workflows/reusable-security.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: generic
+      fail_on_severity: high
+      upload_sarif: true
+      scan_container: false
+      container_image: ""
+      run_semgrep: true
+      run_language_analysis: true
+      working_directory: .

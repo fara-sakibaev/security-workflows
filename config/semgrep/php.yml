@@ -1,0 +1,20 @@
+rules:
+  - id: php-exec-shell-command
+    message: Untrusted request data reaches a PHP shell execution API.
+    languages: [php]
+    severity: ERROR
+    pattern-either:
+      - pattern: shell_exec($_GET[$KEY])
+      - pattern: shell_exec($_POST[$KEY])
+      - pattern: exec($_GET[$KEY])
+      - pattern: exec($_POST[$KEY])
+      - pattern: system($_GET[$KEY])
+      - pattern: system($_POST[$KEY])
+
+  - id: php-unsafe-unserialize-request
+    message: Request data must not be passed to PHP object deserialization.
+    languages: [php]
+    severity: ERROR
+    pattern-either:
+      - pattern: unserialize($_GET[$KEY])
+      - pattern: unserialize($_POST[$KEY])

@@ -1,0 +1,19 @@
+name: external-security-generic
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security:
+    uses: OWNER/security-workflows/.github/workflows/reusable-security.yml@FULL_COMMIT_SHA
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: generic
+      upload_sarif: true
+      working_directory: .

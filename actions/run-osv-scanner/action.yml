@@ -1,0 +1,47 @@
+name: Run OSV-Scanner
+description: Scan supported dependency files with OSV-Scanner and normalized outputs.
+inputs:
+  working-directory:
+    description: Absolute caller repository working directory
+    required: true
+  report-dir:
+    description: Absolute output directory
+    required: true
+  profile:
+    description: Repository profile
+    required: true
+  fail-on-severity:
+    description: Reserved public gate threshold; OSV findings are authoritative regardless of severity
+    required: false
+    default: high
+outputs:
+  status:
+    description: Normalized scanner status
+    value: ${{ steps.scan.outputs.status }}
+  findings:
+    description: Unique vulnerable package and advisory pairs
+    value: ${{ steps.scan.outputs.findings }}
+  blocking-findings:
+    description: Authoritative OSV findings that block
+    value: ${{ steps.scan.outputs.blocking-findings }}
+  json-path:
+    description: JSON report path
+    value: ${{ steps.scan.outputs.json-path }}
+  sarif-path:
+    description: SARIF report path
+    value: ${{ steps.scan.outputs.sarif-path }}
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        REPORT_DIRECTORY: ${{ inputs.report-dir }}
+        PROFILE: ${{ inputs.profile }}
+        FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+        SECURITY_TOOLS_DIR: ${{ runner.temp }}/security-tools/bin
+      run: |
+        set -euo pipefail
+        bash "$GITHUB_ACTION_PATH/../../scripts/install-tool.sh" osv-scanner
+        bash "$GITHUB_ACTION_PATH/../../scripts/run-osv-scanner.sh"

@@ -1,0 +1,37 @@
+name: Run Gitleaks
+description: Scan caller content and Git history with normalized machine-readable outputs.
+inputs:
+  working-directory:
+    description: Absolute caller repository working directory
+    required: true
+  report-dir:
+    description: Absolute output directory
+    required: true
+  include-history:
+    description: Scan available Git history in addition to current content
+    required: false
+    default: "true"
+outputs:
+  status:
+    description: Normalized scanner status
+    value: ${{ steps.scan.outputs.status }}
+  findings:
+    description: Total findings across content and history scans
+    value: ${{ steps.scan.outputs.findings }}
+  sarif-paths:
+    description: Space-separated SARIF paths
+    value: ${{ steps.scan.outputs.sarif-paths }}
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        REPORT_DIRECTORY: ${{ inputs.report-dir }}
+        INCLUDE_HISTORY: ${{ inputs.include-history }}
+        SECURITY_TOOLS_DIR: ${{ runner.temp }}/security-tools/bin
+      run: |
+        set -euo pipefail
+        bash "$GITHUB_ACTION_PATH/../../scripts/install-tool.sh" gitleaks
+        bash "$GITHUB_ACTION_PATH/../../scripts/run-gitleaks.sh"

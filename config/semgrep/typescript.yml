@@ -1,0 +1,22 @@
+rules:
+  - id: ts-unsafe-eval
+    message: Avoid eval in JavaScript/TypeScript.
+    languages: [javascript, typescript]
+    severity: ERROR
+    pattern: eval($X)
+
+  - id: ts-unsafe-child-process-exec
+    message: Review subprocess execution with shell.
+    languages: [javascript, typescript]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec($CMD)
+          - pattern: child_process.execSync($CMD)
+
+  - id: ts-unsafely-disabled-tls
+    message: TLS verification must not be disabled for external requests.
+    languages: [javascript, typescript]
+    severity: ERROR
+    patterns:
+      - pattern: 'axios.create({ ..., httpsAgent: false, ... })'
