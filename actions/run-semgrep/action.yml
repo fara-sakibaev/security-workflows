@@ -1,0 +1,43 @@
+name: Run Semgrep
+description: Run Semgrep Community Edition with central and additive project rules.
+inputs:
+  working-directory:
+    description: Absolute caller repository working directory
+    required: true
+  profile:
+    description: Repository profile
+    required: true
+  report-dir:
+    description: Absolute output directory
+    required: true
+  local-rules:
+    description: Caller-relative additive rules directory
+    required: false
+    default: .security/semgrep
+outputs:
+  status:
+    description: Normalized scanner status
+    value: ${{ steps.scan.outputs.status }}
+  findings:
+    description: Finding count
+    value: ${{ steps.scan.outputs.findings }}
+  sarif-path:
+    description: SARIF report path
+    value: ${{ steps.scan.outputs.sarif-path }}
+  json-path:
+    description: JSON report path
+    value: ${{ steps.scan.outputs.json-path }}
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        PROFILE: ${{ inputs.profile }}
+        REPORT_DIRECTORY: ${{ inputs.report-dir }}
+        LOCAL_RULES: ${{ inputs.local-rules }}
+        SECURITY_TOOLS_DIR: ${{ runner.temp }}/security-tools/bin
+      run: |
+        set -euo pipefail
+        bash "$GITHUB_ACTION_PATH/../../scripts/run-semgrep.sh"

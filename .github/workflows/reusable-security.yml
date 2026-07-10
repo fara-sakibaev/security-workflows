@@ -1,0 +1,195 @@
+name: reusable-security
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: generic | php | rust | python | typescript
+        required: true
+        type: string
+      fail_on_severity:
+        description: Minimum Trivy severity that blocks the workflow
+        required: false
+        default: high
+        type: string
+      upload_sarif:
+        description: Upload officially supported SARIF reports
+        required: false
+        default: true
+        type: boolean
+      scan_container:
+        description: Scan the supplied container image with Trivy
+        required: false
+        default: false
+        type: boolean
+      container_image:
+        description: Existing container image reference; no image is built
+        required: false
+        default: ""
+        type: string
+      run_semgrep:
+        description: Run Semgrep Community Edition
+        required: false
+        default: true
+        type: boolean
+      run_language_analysis:
+        description: Run configured profile-specific analysis
+        required: false
+        default: true
+        type: boolean
+      working_directory:
+        description: Relative directory below the caller repository root
+        required: false
+        default: .
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-inputs:
+    name: Validate public inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      profile: ${{ steps.validate.outputs.profile }}
+      severity: ${{ steps.validate.outputs.severity }}
+      working-directory: ${{ steps.validate.outputs.working-directory }}
+      container-image: ${{ steps.validate.outputs.container-image }}
+    steps:
+      - id: workflow-identity
+        name: Resolve reusable workflow identity
+        shell: bash
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          job = json.loads(os.environ['JOB_CONTEXT'])
+          repository = job.get('workflow_repository', '')
+          sha = job.get('workflow_sha', '')
+          if not repository or not re.fullmatch(r'[0-9a-f]{40}', sha):
+              raise SystemExit('reusable workflow identity is unavailable')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'repository={repository}\nsha={sha}\n')
+          PY
+
+      - name: Checkout exact security workflow source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ steps.workflow-identity.outputs.repository }}
+          ref: ${{ steps.workflow-identity.outputs.sha }}
+          path: security-platform
+          persist-credentials: false
+
+      - id: validate
+        name: Validate enums and untrusted strings
+        shell: bash
+        env:
+          INPUT_PROFILE: ${{ inputs.profile }}
+          INPUT_SEVERITY: ${{ inputs.fail_on_severity }}
+          INPUT_WORKDIR: ${{ inputs.working_directory }}
+          INPUT_SCAN_CONTAINER: ${{ inputs.scan_container }}
+          INPUT_CONTAINER_IMAGE: ${{ inputs.container_image }}
+        run: |
+          set -euo pipefail
+          bash security-platform/scripts/validate-inputs.sh
+
+  generic:
+    name: Generic profile
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.profile == 'generic'
+    uses: ./.github/workflows/reusable-generic.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: generic
+      fail_on_severity: ${{ needs.validate-inputs.outputs.severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ needs.validate-inputs.outputs.container-image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ needs.validate-inputs.outputs.working-directory }}
+
+  php:
+    name: PHP profile
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.profile == 'php'
+    uses: ./.github/workflows/reusable-php.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: php
+      fail_on_severity: ${{ needs.validate-inputs.outputs.severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ needs.validate-inputs.outputs.container-image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ needs.validate-inputs.outputs.working-directory }}
+
+  rust:
+    name: Rust profile
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.profile == 'rust'
+    uses: ./.github/workflows/reusable-rust.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: rust
+      fail_on_severity: ${{ needs.validate-inputs.outputs.severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ needs.validate-inputs.outputs.container-image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ needs.validate-inputs.outputs.working-directory }}
+
+  python:
+    name: Python profile
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.profile == 'python'
+    uses: ./.github/workflows/reusable-python.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: python
+      fail_on_severity: ${{ needs.validate-inputs.outputs.severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ needs.validate-inputs.outputs.container-image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ needs.validate-inputs.outputs.working-directory }}
+
+  typescript:
+    name: TypeScript profile
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.profile == 'typescript'
+    uses: ./.github/workflows/reusable-typescript.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: typescript
+      fail_on_severity: ${{ needs.validate-inputs.outputs.severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ needs.validate-inputs.outputs.container-image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ needs.validate-inputs.outputs.working-directory }}

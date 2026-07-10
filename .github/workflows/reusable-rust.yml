@@ -1,0 +1,165 @@
+name: reusable-security-rust
+
+on:
+  workflow_call:
+    inputs:
+      profile: {required: true, type: string}
+      fail_on_severity: {required: true, type: string}
+      upload_sarif: {required: true, type: boolean}
+      scan_container: {required: true, type: boolean}
+      container_image: {required: false, default: "", type: string}
+      run_semgrep: {required: true, type: boolean}
+      run_language_analysis: {required: true, type: boolean}
+      working_directory: {required: true, type: string}
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Rust baseline
+    uses: ./.github/workflows/reusable-generic.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: rust
+      fail_on_severity: ${{ inputs.fail_on_severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ inputs.container_image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ inputs.working_directory }}
+
+  rust-analysis:
+    name: Clippy and configured cargo-deny policy
+    if: inputs.run_language_analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: workspace
+          persist-credentials: false
+
+      - id: workdir
+        shell: bash
+        env:
+          REQUESTED_WORKDIR: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          root="$(cd workspace && pwd -P)"
+          case "$REQUESTED_WORKDIR" in /*|*..*) exit 2 ;; esac
+          path="$(cd "$root/$REQUESTED_WORKDIR" && pwd -P)"
+          case "$path/" in "$root/"*) ;; *) exit 2 ;; esac
+          printf 'path=%s\n' "$path" >> "$GITHUB_OUTPUT"
+
+      - id: clippy
+        name: Run Clippy with project policy
+        shell: bash
+        env:
+          WORKDIR: ${{ steps.workdir.outputs.path }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports/rust
+          if [ ! -f "$WORKDIR/Cargo.toml" ]; then
+            printf 'status=unsupported-repository\nfindings=0\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          command -v cargo >/dev/null 2>&1 || {
+            printf 'status=scanner-execution-failure\nfindings=0\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          set +e
+          cargo clippy --manifest-path "$WORKDIR/Cargo.toml" --all-targets --all-features \
+            --message-format=json > reports/rust/clippy.json
+          exit_code=$?
+          set -e
+          read -r findings clippy_errors compiler_errors < <(python3 - reports/rust/clippy.json <<'PY'
+          import json
+          import sys
+          findings = clippy_errors = compiler_errors = 0
+          for line in open(sys.argv[1], encoding='utf-8'):
+              try:
+                  message = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if message.get('reason') != 'compiler-message':
+                  continue
+              diagnostic = message.get('message', {})
+              level = diagnostic.get('level')
+              code = (diagnostic.get('code') or {}).get('code', '')
+              if level in {'warning', 'error'}:
+                  findings += 1
+              if level == 'error' and code.startswith('clippy::'):
+                  clippy_errors += 1
+              elif level == 'error':
+                  compiler_errors += 1
+          print(findings, clippy_errors, compiler_errors)
+          PY
+          )
+          if [ "$exit_code" -eq 0 ] && [ "$findings" -eq 0 ]; then status=passed
+          elif [ "$compiler_errors" -gt 0 ]; then status=scanner-execution-failure
+          elif [ "$findings" -gt 0 ]; then status=findings-detected
+          else status=scanner-execution-failure
+          fi
+          printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
+
+      - id: cargo-deny
+        name: Run configured cargo-deny policy without duplicate advisory authority
+        shell: bash
+        env:
+          WORKDIR: ${{ steps.workdir.outputs.path }}
+        run: |
+          set -euo pipefail
+          config=""
+          for candidate in deny.toml cargo-deny.toml .config/deny.toml; do
+            if [ -f "$WORKDIR/$candidate" ]; then config="$WORKDIR/$candidate"; break; fi
+          done
+          if [ -z "$config" ]; then
+            printf 'status=not-configured\nfindings=0\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! command -v cargo-deny >/dev/null 2>&1; then
+            cargo install --locked --version 0.19.4 cargo-deny
+          fi
+          set +e
+          cargo deny --manifest-path "$WORKDIR/Cargo.toml" --format json \
+            check --config "$config" bans licenses sources > reports/rust/cargo-deny.json 2>&1
+          exit_code=$?
+          set -e
+          findings="$(wc -l < reports/rust/cargo-deny.json | tr -d ' ')"
+          if [ "$exit_code" -eq 0 ]; then status=passed
+          elif [ "$exit_code" -ge 1 ] && [ "$exit_code" -le 15 ]; then status=findings-detected
+          else status=scanner-execution-failure
+          fi
+          printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
+
+      - name: Retain Rust reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-analysis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/rust
+          if-no-files-found: warn
+          retention-days: 5
+
+      - name: Enforce execution status
+        shell: bash
+        env:
+          CLIPPY_STATUS: ${{ steps.clippy.outputs.status }}
+          CLIPPY_FINDINGS: ${{ steps.clippy.outputs.findings }}
+          DENY_STATUS: ${{ steps.cargo-deny.outputs.status }}
+          DENY_FINDINGS: ${{ steps.cargo-deny.outputs.findings }}
+        run: |
+          set -euo pipefail
+          printf 'Clippy: %s (%s); cargo-deny: %s (%s)\n' "$CLIPPY_STATUS" "$CLIPPY_FINDINGS" "$DENY_STATUS" "$DENY_FINDINGS" >> "$GITHUB_STEP_SUMMARY"
+          [ "$CLIPPY_STATUS" != scanner-execution-failure ] || exit 1
+          [ "$DENY_STATUS" != scanner-execution-failure ] || exit 1
+          # Clippy and cargo-deny follow project-owned lint policy; findings remain report-only here.

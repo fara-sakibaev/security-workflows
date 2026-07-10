@@ -1,0 +1,128 @@
+name: reusable-security-php
+
+on:
+  workflow_call:
+    inputs:
+      profile: {required: true, type: string}
+      fail_on_severity: {required: true, type: string}
+      upload_sarif: {required: true, type: boolean}
+      scan_container: {required: true, type: boolean}
+      container_image: {required: false, default: "", type: string}
+      run_semgrep: {required: true, type: boolean}
+      run_language_analysis: {required: true, type: boolean}
+      working_directory: {required: true, type: string}
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: PHP baseline
+    uses: ./.github/workflows/reusable-generic.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: php
+      fail_on_severity: ${{ inputs.fail_on_severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ inputs.container_image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ inputs.working_directory }}
+
+  psalm:
+    name: Project-owned Psalm analysis
+    if: inputs.run_language_analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: workspace
+          persist-credentials: false
+
+      - id: analyze
+        name: Install locked dependencies and run Psalm
+        shell: bash
+        env:
+          REQUESTED_WORKDIR: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          root="$(cd workspace && pwd -P)"
+          case "$REQUESTED_WORKDIR" in /*|*..*) exit 2 ;; esac
+          workdir="$(cd "$root/$REQUESTED_WORKDIR" && pwd -P)"
+          report_dir="$GITHUB_WORKSPACE/reports/psalm"
+          mkdir -p "$report_dir"
+          if [ ! -f "$workdir/composer.lock" ]; then
+            printf 'psalm-status=not-configured\ntaint-status=not-configured\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          command -v composer >/dev/null 2>&1 || {
+            printf 'psalm-status=scanner-execution-failure\ntaint-status=scanner-execution-failure\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if ! composer install --working-dir "$workdir" --no-interaction --no-progress \
+            --prefer-dist --no-scripts --no-plugins; then
+            printf 'psalm-status=scanner-execution-failure\ntaint-status=scanner-execution-failure\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          psalm="$workdir/vendor/bin/psalm"
+          if [ ! -x "$psalm" ]; then
+            printf 'psalm-status=not-configured\ntaint-status=not-configured\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          config=""
+          [ -f "$workdir/psalm.xml" ] && config="$workdir/psalm.xml"
+          [ -z "$config" ] && [ -f "$workdir/psalm.xml.dist" ] && config="$workdir/psalm.xml.dist"
+          if [ -z "$config" ]; then
+            printf 'psalm-status=not-configured\ntaint-status=not-configured\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          run_psalm() {
+            local report="$1"
+            shift
+            local code
+            set +e
+            (cd "$workdir" && "$psalm" --no-progress --output-format=json --show-info=false \
+              --config="$config" "$@") > "$report"
+            code=$?
+            set -e
+            case "$code" in
+              0) printf passed ;;
+              2) printf findings-detected ;;
+              *) printf scanner-execution-failure ;;
+            esac
+          }
+
+          psalm_status="$(run_psalm "$report_dir/psalm.json")"
+          taint_status="$(run_psalm "$report_dir/psalm-taint.json" --taint-analysis)"
+          printf 'psalm-status=%s\ntaint-status=%s\n' "$psalm_status" "$taint_status" >> "$GITHUB_OUTPUT"
+
+      - name: Retain Psalm JSON
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: psalm-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/psalm
+          if-no-files-found: warn
+          retention-days: 5
+
+      - name: Enforce Psalm execution status
+        shell: bash
+        env:
+          PSALM_STATUS: ${{ steps.analyze.outputs.psalm-status }}
+          TAINT_STATUS: ${{ steps.analyze.outputs.taint-status }}
+        run: |
+          set -euo pipefail
+          printf 'Psalm: %s; Psalm taint: %s\n' "$PSALM_STATUS" "$TAINT_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          [ "$PSALM_STATUS" != scanner-execution-failure ] || exit 1
+          [ "$TAINT_STATUS" != scanner-execution-failure ] || exit 1
+          # Project-owned Psalm issue levels determine findings; this central workflow does not invent a new Psalm gate.

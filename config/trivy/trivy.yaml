@@ -1,0 +1,4 @@
+timeout: 10m
+quiet: true
+skip-version-check: true
+disable-telemetry: true

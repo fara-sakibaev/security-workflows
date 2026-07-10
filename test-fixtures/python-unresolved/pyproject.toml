@@ -1,0 +1,4 @@
+[project]
+name = "unresolved-python-fixture"
+version = "0.1.0"
+dependencies = ["PyYAML==6.0.3"]

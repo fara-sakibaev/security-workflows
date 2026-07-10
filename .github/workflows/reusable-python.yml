@@ -1,0 +1,106 @@
+name: reusable-security-python
+
+on:
+  workflow_call:
+    inputs:
+      profile: {required: true, type: string}
+      fail_on_severity: {required: true, type: string}
+      upload_sarif: {required: true, type: boolean}
+      scan_container: {required: true, type: boolean}
+      container_image: {required: false, default: "", type: string}
+      run_semgrep: {required: true, type: boolean}
+      run_language_analysis: {required: true, type: boolean}
+      working_directory: {required: true, type: string}
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Python baseline
+    uses: ./.github/workflows/reusable-generic.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      profile: python
+      fail_on_severity: ${{ inputs.fail_on_severity }}
+      upload_sarif: ${{ inputs.upload_sarif }}
+      scan_container: ${{ inputs.scan_container }}
+      container_image: ${{ inputs.container_image }}
+      run_semgrep: ${{ inputs.run_semgrep }}
+      run_language_analysis: ${{ inputs.run_language_analysis }}
+      working_directory: ${{ inputs.working_directory }}
+
+  bandit:
+    name: Bandit language analysis
+    if: inputs.run_language_analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: workspace
+          persist-credentials: false
+
+      - id: analyze
+        name: Run pinned Bandit
+        shell: bash
+        env:
+          REQUESTED_WORKDIR: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          root="$(cd workspace && pwd -P)"
+          case "$REQUESTED_WORKDIR" in /*|*..*) exit 2 ;; esac
+          workdir="$(cd "$root/$REQUESTED_WORKDIR" && pwd -P)"
+          case "$workdir/" in "$root/"*) ;; *) exit 2 ;; esac
+          report_dir="$GITHUB_WORKSPACE/reports/bandit"
+          mkdir -p "$report_dir"
+          if ! find "$workdir" -type f -name '*.py' -print -quit | grep -q .; then
+            printf 'status=unsupported-repository\nfindings=0\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 -m venv "$RUNNER_TEMP/bandit"
+          "$RUNNER_TEMP/bandit/bin/python" -m pip install --disable-pip-version-check 'bandit==1.7.10'
+          set +e
+          "$RUNNER_TEMP/bandit/bin/bandit" -r "$workdir" -lll -iii -f json \
+            -x "$workdir/.venv" -o "$report_dir/bandit.json"
+          exit_code=$?
+          set -e
+          findings="$(python3 - "$report_dir/bandit.json" <<'PY'
+          import json
+          import sys
+          data = json.load(open(sys.argv[1], encoding='utf-8'))
+          print(len(data.get('results', [])))
+          PY
+          )" || exit_code=2
+          if [ "$exit_code" -eq 0 ]; then status=passed
+          elif [ "$exit_code" -eq 1 ] && [ "$findings" -gt 0 ]; then status=findings-detected
+          else status=scanner-execution-failure
+          fi
+          printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
+
+      - name: Retain Bandit JSON
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bandit-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/bandit
+          if-no-files-found: warn
+          retention-days: 5
+
+      - name: Enforce Bandit status
+        shell: bash
+        env:
+          STATUS: ${{ steps.analyze.outputs.status }}
+          FINDINGS: ${{ steps.analyze.outputs.findings }}
+        run: |
+          set -euo pipefail
+          printf 'Bandit status: %s (%s high-confidence/high-severity findings)\n' "$STATUS" "$FINDINGS" >> "$GITHUB_STEP_SUMMARY"
+          [ "$STATUS" != scanner-execution-failure ] || exit 1
+          [ "$STATUS" != findings-detected ] || exit 1

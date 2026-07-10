@@ -1,0 +1,53 @@
+name: Run Trivy
+description: Run Trivy filesystem, misconfiguration, and explicitly requested image scans.
+inputs:
+  working-directory:
+    description: Absolute caller repository working directory
+    required: true
+  report-dir:
+    description: Absolute output directory
+    required: true
+  fail-on-severity:
+    description: Minimum Trivy severity included in the blocking report
+    required: false
+    default: high
+  scan-container:
+    description: Enable image scanning
+    required: false
+    default: "false"
+  container-image:
+    description: Immutable or consumer-controlled image reference
+    required: false
+    default: ""
+outputs:
+  status:
+    description: Normalized scanner status
+    value: ${{ steps.scan.outputs.status }}
+  vuln-findings:
+    description: Filesystem vulnerability findings at the configured threshold
+    value: ${{ steps.scan.outputs.vuln-findings }}
+  misconfig-findings:
+    description: Misconfiguration findings at the configured threshold
+    value: ${{ steps.scan.outputs.misconfig-findings }}
+  image-findings:
+    description: Image findings at the configured threshold
+    value: ${{ steps.scan.outputs.image-findings }}
+  sarif-paths:
+    description: Space-separated SARIF paths
+    value: ${{ steps.scan.outputs.sarif-paths }}
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        REPORT_DIRECTORY: ${{ inputs.report-dir }}
+        FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+        SCAN_CONTAINER: ${{ inputs.scan-container }}
+        CONTAINER_IMAGE: ${{ inputs.container-image }}
+        SECURITY_TOOLS_DIR: ${{ runner.temp }}/security-tools/bin
+      run: |
+        set -euo pipefail
+        bash "$GITHUB_ACTION_PATH/../../scripts/install-tool.sh" trivy
+        bash "$GITHUB_ACTION_PATH/../../scripts/run-trivy.sh"
