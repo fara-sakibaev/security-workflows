@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$SCRIPT_DIR/lib.sh"
+# shellcheck disable=SC1091
 # shellcheck source=./versions.env
 source "$SCRIPT_DIR/versions.env"
 
