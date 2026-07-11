@@ -41,7 +41,7 @@ run_gitleaks_fixture "$SECURITY_ROOT/test-fixtures/clean-repo" 0 \
   "$OUTPUT/gitleaks-clean.sarif" "$OUTPUT/gitleaks-clean.log"
 run_gitleaks_fixture "$SECURITY_ROOT/test-fixtures/fake-secret-repo" 1 \
   "$OUTPUT/gitleaks-finding.sarif" "$OUTPUT/gitleaks-finding.log"
-if rg -F 'ghp_7F4kSyntheticCredentialForFixture000000' "$OUTPUT"/*.log >/dev/null; then
+if grep -Fq 'ghp_7F4kSyntheticCredentialForFixture000000' "$OUTPUT"/*.log; then
   printf 'Gitleaks log disclosed the complete synthetic credential.\n' >&2
   exit 1
 fi
@@ -49,7 +49,7 @@ fi
 assert_output_status() {
   local file="$1"
   local expected="$2"
-  if ! rg -q "^status=${expected}$" "$file"; then
+  if ! grep -Fxq "status=$expected" "$file"; then
     printf 'Expected status %s in %s.\n' "$expected" "$file" >&2
     sed -n '1,120p' "$file" >&2
     exit 1
@@ -151,7 +151,7 @@ GITHUB_OUTPUT="$STATUS_OUTPUT" INPUT_PROFILE=unknown INPUT_SEVERITY=high INPUT_W
 GITHUB_OUTPUT="$STATUS_OUTPUT" WORKING_DIRECTORY="$SECURITY_ROOT/test-fixtures/unsupported-stack" \
   REPORT_DIRECTORY="$OUTPUT/osv-unsupported" PROFILE=typescript \
   SECURITY_TOOLS_DIR="$(security_tools_dir)" bash "$SCRIPT_DIR/run-osv-scanner.sh"
-rg -q '^status=unsupported-repository$' "$STATUS_OUTPUT" || {
+grep -Fxq 'status=unsupported-repository' "$STATUS_OUTPUT" || {
   printf 'OSV unsupported repository status was not emitted.\n' >&2
   exit 1
 }
