@@ -81,7 +81,7 @@ jobs:
             --message-format=json > reports/rust/clippy.json
           exit_code=$?
           set -e
-          read -r findings clippy_errors compiler_errors < <(python3 - reports/rust/clippy.json <<'PY'
+          read -r findings _clippy_errors compiler_errors < <(python3 - reports/rust/clippy.json <<'PY'
           import json
           import sys
           findings = clippy_errors = compiler_errors = 0
@@ -104,9 +104,9 @@ jobs:
           print(findings, clippy_errors, compiler_errors)
           PY
           )
-          if [ "$exit_code" -eq 0 ] && [ "$findings" -eq 0 ]; then status=passed
-          elif [ "$compiler_errors" -gt 0 ]; then status=scanner-execution-failure
-          elif [ "$findings" -gt 0 ]; then status=findings-detected
+          if (( exit_code == 0 && findings == 0 )); then status=passed
+          elif (( compiler_errors > 0 )); then status=scanner-execution-failure
+          elif (( findings > 0 )); then status=findings-detected
           else status=scanner-execution-failure
           fi
           printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
@@ -135,8 +135,8 @@ jobs:
           exit_code=$?
           set -e
           findings="$(wc -l < reports/rust/cargo-deny.json | tr -d ' ')"
-          if [ "$exit_code" -eq 0 ]; then status=passed
-          elif [ "$exit_code" -ge 1 ] && [ "$exit_code" -le 15 ]; then status=findings-detected
+          if (( exit_code == 0 )); then status=passed
+          elif (( exit_code >= 1 && exit_code <= 15 )); then status=findings-detected
           else status=scanner-execution-failure
           fi
           printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
