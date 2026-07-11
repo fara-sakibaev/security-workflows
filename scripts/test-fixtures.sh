@@ -136,8 +136,22 @@ if 'lodash' not in packages or not any(ids):
     raise SystemExit(f'expected vulnerable lodash result, packages={packages}, ids={ids}')
 PY
 
+set +e
 "$OSV" scan source --format=json --output-file="$OUTPUT/osv-clean.json" \
-  "$SECURITY_ROOT/test-fixtures/osv-clean" >/dev/null
+  "$SECURITY_ROOT/test-fixtures/osv-clean" >"$OUTPUT/osv-clean.log" 2>&1
+OSV_CLEAN_EXIT=$?
+set -e
+if [ "$OSV_CLEAN_EXIT" -eq 128 ]; then
+  if ! grep -Fq "No package sources found" "$OUTPUT/osv-clean.log"; then
+    printf 'OSV clean fixture returned exit 128 for unexpected reason.\n' >&2
+    sed -n '1,120p' "$OUTPUT/osv-clean.log" >&2
+    exit 1
+  fi
+elif [ "$OSV_CLEAN_EXIT" -ne 0 ]; then
+  printf 'OSV clean fixture returned %s.\n' "$OSV_CLEAN_EXIT" >&2
+  sed -n '1,120p' "$OUTPUT/osv-clean.log" >&2
+  exit 1
+fi
 
 STATUS_OUTPUT="$OUTPUT/status.outputs"
 : > "$STATUS_OUTPUT"
