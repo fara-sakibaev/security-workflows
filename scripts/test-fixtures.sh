@@ -142,7 +142,7 @@ PY
 STATUS_OUTPUT="$OUTPUT/status.outputs"
 : > "$STATUS_OUTPUT"
 GITHUB_OUTPUT="$STATUS_OUTPUT" INPUT_PROFILE=unknown INPUT_SEVERITY=high INPUT_WORKDIR=. \
-  INPUT_SCAN_CONTAINER=false INPUT_CONTAINER_IMAGE= \
+  INPUT_SCAN_CONTAINER=false INPUT_CONTAINER_IMAGE="" \
   bash "$SCRIPT_DIR/validate-inputs.sh" >/dev/null 2>&1 && {
     printf 'Invalid profile input unexpectedly passed.\n' >&2
     exit 1
@@ -249,7 +249,7 @@ set -e
 
 : > "$STATUS_OUTPUT"
 GITHUB_OUTPUT="$STATUS_OUTPUT" WORKING_DIRECTORY="$SECURITY_ROOT/test-fixtures/trivy-misconfiguration" \
-  REPORT_DIRECTORY="$OUTPUT/trivy-action" FAIL_ON_SEVERITY=high SCAN_CONTAINER=false CONTAINER_IMAGE= \
+  REPORT_DIRECTORY="$OUTPUT/trivy-action" FAIL_ON_SEVERITY=high SCAN_CONTAINER=false CONTAINER_IMAGE="" \
   SECURITY_TOOLS_DIR="$(security_tools_dir)" bash "$SCRIPT_DIR/run-trivy.sh"
 assert_output_status "$STATUS_OUTPUT" findings-detected
 
