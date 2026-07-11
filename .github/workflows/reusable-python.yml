@@ -79,9 +79,9 @@ jobs:
           print(len(data.get('results', [])))
           PY
           )" || exit_code=2
-          if (( exit_code == 0 )); then status=passed
-          elif (( exit_code == 1 && findings > 0 )); then status=findings-detected
-          else status=scanner-execution-failure
+          if (( exit_code == 0 )); then status='passed'
+          elif (( exit_code == 1 && findings > 0 )); then status='findings-detected'
+          else status='scanner-execution-failure'
           fi
           printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
 

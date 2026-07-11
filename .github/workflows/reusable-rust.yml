@@ -104,10 +104,10 @@ jobs:
           print(findings, clippy_errors, compiler_errors)
           PY
           )
-          if (( exit_code == 0 && findings == 0 )); then status=passed
-          elif (( compiler_errors > 0 )); then status=scanner-execution-failure
-          elif (( findings > 0 )); then status=findings-detected
-          else status=scanner-execution-failure
+          if (( exit_code == 0 && findings == 0 )); then status='passed'
+          elif (( compiler_errors > 0 )); then status='scanner-execution-failure'
+          elif (( findings > 0 )); then status='findings-detected'
+          else status='scanner-execution-failure'
           fi
           printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
 
@@ -135,9 +135,9 @@ jobs:
           exit_code=$?
           set -e
           findings="$(wc -l < reports/rust/cargo-deny.json | tr -d ' ')"
-          if (( exit_code == 0 )); then status=passed
-          elif (( exit_code >= 1 && exit_code <= 15 )); then status=findings-detected
-          else status=scanner-execution-failure
+          if (( exit_code == 0 )); then status='passed'
+          elif (( exit_code >= 1 && exit_code <= 15 )); then status='findings-detected'
+          else status='scanner-execution-failure'
           fi
           printf 'status=%s\nfindings=%s\n' "$status" "$findings" >> "$GITHUB_OUTPUT"
 
