@@ -60,12 +60,25 @@ done
 
 JSON_REPORT="$REPORT_DIR/osv-results.json"
 SARIF_REPORT="$REPORT_DIR/osv-results.sarif"
+JSON_LOG="$REPORT_DIR/osv-json.log"
+SARIF_LOG="$REPORT_DIR/osv-sarif.log"
+EMPTY_OSV_REPORT='{"results":[]}'
+EMPTY_SARIF_REPORT='{"version":"2.1.0","runs":[]}'
 set +e
-"$OSV" scan source "${ARGS[@]}" --format json --output-file "$JSON_REPORT"
+"$OSV" scan source "${ARGS[@]}" --format json --output-file "$JSON_REPORT" >"$JSON_LOG" 2>&1
 JSON_EXIT=$?
-"$OSV" scan source "${ARGS[@]}" --format sarif --output-file "$SARIF_REPORT"
+"$OSV" scan source "${ARGS[@]}" --format sarif --output-file "$SARIF_REPORT" >"$SARIF_LOG" 2>&1
 SARIF_EXIT=$?
 set -e
+
+if [ "$JSON_EXIT" -eq 128 ] && grep -qF "No package sources found" "$JSON_LOG"; then
+  JSON_EXIT=0
+  printf '%s\n' "$EMPTY_OSV_REPORT" > "$JSON_REPORT"
+fi
+if [ "$SARIF_EXIT" -eq 128 ] && grep -qF "No package sources found" "$SARIF_LOG"; then
+  SARIF_EXIT=0
+  printf '%s\n' "$EMPTY_SARIF_REPORT" > "$SARIF_REPORT"
+fi
 
 if { [ "$JSON_EXIT" -ne 0 ] && [ "$JSON_EXIT" -ne 1 ]; } || \
    { [ "$SARIF_EXIT" -ne 0 ] && [ "$SARIF_EXIT" -ne 1 ]; }; then
