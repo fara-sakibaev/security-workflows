@@ -4,6 +4,7 @@
 .tools/
 .test-output/
 .trivycache/
+/.hermod/
 
 # macOS
 .DS_Store

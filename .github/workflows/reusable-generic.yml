@@ -39,7 +39,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      actions: write
     outputs:
       gitleaks-status: ${{ steps.gitleaks.outputs.status }}
       gitleaks-findings: ${{ steps.gitleaks.outputs.findings }}
